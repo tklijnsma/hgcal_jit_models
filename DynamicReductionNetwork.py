@@ -438,6 +438,49 @@ class DynamicReductionNetworkJittable(nn.Module):
 nonjit_model = DynamicReductionNetworkJittable(input_dim=5, hidden_dim=64, output_dim=1, k=16)
 model = torch.jit.script(nonjit_model)
 print(model)
-torch.jit.save(model, 'drn_noweights.pt')
-print('okay')
+
+print('Loading weights...')
+
+pretrained_dict = torch.load('model_cont3_checkpoint_best.pth.tar', map_location=torch.device('cpu'))['state_dict']
+model_dict = model.state_dict()
+
+map_pretrained_to_model = {
+    'drn.datanorm'              : 'datanorm',
+    'drn.inputnet.0.weight'     : 'inputnet.0.weight',
+    'drn.inputnet.0.bias'       : 'inputnet.0.bias',
+    'drn.inputnet.2.weight'     : 'inputnet.2.weight',
+    'drn.inputnet.2.bias'       : 'inputnet.2.bias',
+    'drn.inputnet.4.weight'     : 'inputnet.4.weight',
+    'drn.inputnet.4.bias'       : 'inputnet.4.bias',
+    'drn.edgeconv1.nn.0.weight' : 'edgeconv1.nn.0.weight',
+    'drn.edgeconv1.nn.0.bias'   : 'edgeconv1.nn.0.bias',
+    'drn.edgeconv1.nn.2.weight' : 'edgeconv1.nn.2.weight',
+    'drn.edgeconv1.nn.2.bias'   : 'edgeconv1.nn.2.bias',
+    'drn.edgeconv2.nn.0.weight' : 'edgeconv2.nn.0.weight',
+    'drn.edgeconv2.nn.0.bias'   : 'edgeconv2.nn.0.bias',
+    'drn.edgeconv2.nn.2.weight' : 'edgeconv2.nn.2.weight',
+    'drn.edgeconv2.nn.2.bias'   : 'edgeconv2.nn.2.bias',
+    'drn.edgeconv3.nn.0.weight' : 'edgeconv3.nn.0.weight',
+    'drn.edgeconv3.nn.0.bias'   : 'edgeconv3.nn.0.bias',
+    'drn.edgeconv3.nn.2.weight' : 'edgeconv3.nn.2.weight',
+    'drn.edgeconv3.nn.2.bias'   : 'edgeconv3.nn.2.bias',
+    'drn.output.0.weight'       : 'output.0.weight',
+    'drn.output.0.bias'         : 'output.0.bias',
+    'drn.output.2.weight'       : 'output.2.weight',
+    'drn.output.2.bias'         : 'output.2.bias',
+    'drn.output.4.weight'       : 'output.4.weight',
+    'drn.output.4.bias'         : 'output.4.bias',
+    }
+
+for key in pretrained_dict:
+    model_key = map_pretrained_to_model.get(key, key)
+    if not model_key in model_dict:
+        print('Skipping key {0}, not in model_dict'.format(model_key))
+        continue
+    print('Mapping {0} --> {1}'.format(key, model_key))    
+    model_dict[model_key] = pretrained_dict[key]
+
+print('Done')
+torch.jit.save(model, 'drn.pt')
+print('All okay')
 
