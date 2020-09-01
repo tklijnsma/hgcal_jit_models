@@ -277,7 +277,7 @@ def max_pool(cluster, x: torch.Tensor, edge_index: torch.Tensor, batch: Optional
     # return data
 
 # TK: Jittable version of the model defined above
-class DynamicReductionNetworkJittable(nn.Module):
+class DynamicReductionNetworkJittableLindsey(nn.Module):
     # This model iteratively contracts nearest neighbour graphs 
     # until there is one output node.
     # The latent space trained to group useful features at each level
@@ -287,7 +287,7 @@ class DynamicReductionNetworkJittable(nn.Module):
     # One encoding layer is used to abstract away the input features.
     def __init__(self, input_dim=5, hidden_dim=64, output_dim=1, k=16, aggr='add',
                  norm=torch.tensor([1./500., 1./500., 1./54., 1/25., 1./1000.])):
-        super(DynamicReductionNetworkJittable, self).__init__()
+        super(DynamicReductionNetworkJittableLindsey, self).__init__()
 
         self.datanorm = nn.Parameter(norm)
         
@@ -328,7 +328,6 @@ class DynamicReductionNetworkJittable(nn.Module):
         x = self.datanorm * x
         x = self.inputnet(x)
         
-
         knn = knn_graph(x, self.k, batch, loop=False, flow=self.edgeconv1.flow)
         edge_index = to_undirected(knn)
         x = self.edgeconv1(x, edge_index)
@@ -350,6 +349,91 @@ class DynamicReductionNetworkJittable(nn.Module):
             x = global_max_pool(x, batch)
         
         return self.output(x).squeeze(-1)
+
+
+
+class DynamicReductionNetworkJittable(nn.Module):
+    # SHAMIK'S VERSION: SAME AS ABOVE WITH SLIGHTLY MORE LAYERS
+    def __init__(self, input_dim=5, hidden_dim=64, output_dim=1, k=16, aggr='add',
+                 norm=torch.tensor([1./500., 1./500., 1./54., 1/25., 1./1000.])):
+        super(DynamicReductionNetworkJittable, self).__init__()
+
+        self.datanorm = nn.Parameter(norm)
+        
+        self.k = k
+        start_width = 2 * hidden_dim
+        middle_width = 3 * hidden_dim // 2
+
+        
+        self.inputnet =  nn.Sequential(
+            nn.Linear(input_dim, hidden_dim*2),            
+            nn.ELU(),
+            nn.Linear(hidden_dim*2, hidden_dim*2),
+            nn.ELU(),
+            nn.Linear(hidden_dim*2, hidden_dim),
+            nn.ELU(),
+        )
+                
+        convnn1 = nn.Sequential(nn.Linear(start_width, middle_width),
+                                nn.ELU(),
+                                nn.Linear(middle_width, hidden_dim),                                             
+                                nn.ELU()
+                                )
+        convnn2 = nn.Sequential(nn.Linear(start_width, middle_width),
+                                nn.ELU(),
+                                nn.Linear(middle_width, hidden_dim),                                             
+                                nn.ELU()
+                                )
+        
+        convnn3 = nn.Sequential(nn.Linear(start_width, middle_width),
+                                nn.ELU(),
+                                nn.Linear(middle_width, hidden_dim),                                             
+                                nn.ELU()
+                                )
+                
+        self.edgeconv1 = EdgeConv(nn=convnn1, aggr=aggr).jittable()
+        self.edgeconv2 = EdgeConv(nn=convnn2, aggr=aggr).jittable()
+        self.edgeconv3 = EdgeConv(nn=convnn3, aggr=aggr).jittable()
+        
+        self.output = nn.Sequential(nn.Linear(hidden_dim, hidden_dim),
+                                    nn.ELU(),
+                                    nn.Linear(hidden_dim, hidden_dim//2),
+                                    nn.ELU(),
+                                    nn.Linear(hidden_dim//2, output_dim)
+                                   )
+
+
+    def forward(self, x, batch: Optional[torch.Tensor] = None):
+        x = self.datanorm * x
+        x = self.inputnet(x)
+        
+        edge_index = to_undirected(knn_graph(x, self.k, batch, loop=False, flow=self.edgeconv1.flow))
+        x = self.edgeconv1(x, edge_index)        
+        weight = normalized_cut_2d(edge_index, x)
+        cluster = graclus(edge_index, weight, x.size(0))
+        edge_attr = None
+        x, edge_index, batch, edge_attr = max_pool(cluster, x, edge_index, batch)
+
+        # Additional layer by Shamik
+        edge_index = to_undirected(knn_graph(x, self.k, batch, loop=False, flow=self.edgeconv3.flow))
+        x = self.edgeconv1(x, edge_index)        
+        weight = normalized_cut_2d(edge_index, x)
+        cluster = graclus(edge_index, weight, x.size(0))
+        edge_attr = None
+        x, edge_index, batch, edge_attr = max_pool(cluster, x, edge_index, batch)
+        
+        edge_index = to_undirected(knn_graph(x, self.k, batch, loop=False, flow=self.edgeconv2.flow))
+        x = self.edgeconv2(x, edge_index)
+        
+        weight = normalized_cut_2d(edge_index, x)
+        cluster = graclus(edge_index, weight, x.size(0))
+        x, batch = max_pool_x(cluster, x, batch)
+
+        if not batch is None:
+            x = global_max_pool(x, batch)
+        
+        return self.output(x).squeeze(-1)
+
 
 nonjit_model = DynamicReductionNetworkJittable(input_dim=5, hidden_dim=64, output_dim=1, k=16)
 model = torch.jit.script(nonjit_model)
